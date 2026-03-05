@@ -1,4 +1,4 @@
 data/
 *.sif
 *.out
-*.env
+.env
