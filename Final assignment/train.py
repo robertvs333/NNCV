@@ -147,9 +147,16 @@ def main(args):
     # Define the loss function
     criterion = nn.CrossEntropyLoss(ignore_index=255)  # Ignore the void class
 
-    # Define the optimizer
-    optimizer = AdamW(model.parameters(), lr=args.lr)
+    # Separate the parameters
+    backbone_params = list(model.low_level_features.parameters()) + list(model.high_level_features.parameters())
+    head_params = list(model.aspp.parameters()) + list(model.decoder.parameters())
 
+    # Define optimizer with different rates
+    optimizer = AdamW([
+        {'params': backbone_params, 'lr': args.lr * 0.1}, # 10x smaller for the backbone
+        {'params': head_params, 'lr': args.lr}            # Normal rate for the heads
+    ], weight_decay=5e-2)
+   
     # Training loop
     best_valid_loss = float('inf')
     current_best_model_path = None

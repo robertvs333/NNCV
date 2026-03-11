@@ -140,18 +140,18 @@ class ASPP(nn.Module):
                 nn.ReLU(inplace=True)
             )
             self.branch2 = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=6, dilation=6),
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=2, dilation=2),
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(inplace=True)
             )
             
             self.branch3= nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=12, dilation=12),
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=4, dilation=4),
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(inplace=True)
             )
             self.branch4 = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=18, dilation=18),
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=6, dilation=6),
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(inplace=True)
             )
@@ -238,6 +238,16 @@ class DeepLabV3Plus(nn.Module):
         # Backbone (ResNet-101)
         resnet = resnet101(weights=ResNet101_Weights.IMAGENET1K_V2)
         resnet.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        for module in resnet.layer4.modules():
+            if isinstance(module, nn.Conv2d):
+                # If it was a downsampling layer, stop it
+                if module.stride == (2, 2):
+                    module.stride = (1, 1)
+                # Increase dilation to compensate for the lost stride
+                # This keeps the "view" of the filters the same
+                if module.kernel_size == (3, 3):
+                    module.dilation = (2, 2)
+                    module.padding = (2, 2)
         self.low_level_features = nn.Sequential(*list(resnet.children())[:5])
         self.high_level_features = nn.Sequential(*list(resnet.children())[5:-2])
 
