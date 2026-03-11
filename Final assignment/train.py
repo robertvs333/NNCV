@@ -31,7 +31,7 @@ from torchvision.transforms.v2 import (
     InterpolationMode
 )
 
-from model import Model
+from model import Model, DeepLabV3Plus
 
 
 # Mapping class IDs to train IDs
@@ -139,7 +139,7 @@ def main(args):
     )
 
     # Define the model
-    model = Model(
+    model = DeepLabV3Plus(
         in_channels=3,  # RGB images
         n_classes=19,  # 19 classes in the Cityscapes dataset
     ).to(device)
