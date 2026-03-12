@@ -127,58 +127,69 @@ class OutConv(nn.Module):
         return self.conv(x)
     
 # -------------------------------Second model architecture (DeepLabV3+) ----------------------------
+class AtrousSeparableConv(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, bias=False):
+        super().__init__()
+        self.depthwise = nn.Conv2d(
+            in_channels, in_channels, kernel_size, 
+            stride=stride, padding=padding, dilation=dilation, 
+            groups=in_channels, bias=bias
+        )
+        self.pointwise = nn.Conv2d(
+            in_channels, out_channels, kernel_size=1, bias=bias
+        )
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+        x = self.bn(x)
+        return self.relu(x)
 
 class ASPP(nn.Module):
-        """
-        Atrous Spatial Pyramid Pooling module.
-        """
-        def __init__(self, in_channels, out_channels):
-            super().__init__()
-            self.branch1 = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True)
-            )
-            self.branch2 = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=6, dilation=6),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True)
-            )
+    def __init__(self, in_channels, out_channels, rates):
+        super().__init__()
+        self.stages = nn.ModuleList()
+        
+        # 1x1 conv branch
+        self.stages.append(nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        ))
+        
+        # Atrous Separable branches
+        for rate in rates:
+            self.stages.append(AtrousSeparableConv(
+                in_channels, out_channels, kernel_size=3, 
+                padding=rate, dilation=rate
+            ))
             
-            self.branch3= nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=12, dilation=12),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True)
-            )
-            self.branch4 = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=18, dilation=18),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True)
-            )
-            self.global_pool = nn.Sequential(
-                nn.AdaptiveAvgPool2d((1, 1)),
-                nn.Conv2d(in_channels, out_channels, kernel_size=1),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True)
-            )
-            self.out_conv = nn.Sequential(
-                nn.Conv2d(out_channels * 5, out_channels, kernel_size=1),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True)
-            )
+        # Image Pooling branch
+        self.global_pool = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(out_channels * (len(rates) + 2), out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
 
-        def forward(self, x):
-            conv1_out = self.branch1(x)
-            conv2_out = self.branch2(x)
-            conv3_out = self.branch3(x)
-            conv4_out = self.branch4(x)
-            global_pool_out = self.global_pool(x)
-            global_pool_out = torch.nn.functional.interpolate(global_pool_out, size=x.shape[2:], mode='bilinear', align_corners=True)
-
-            out = torch.cat([conv1_out, conv2_out, conv3_out, conv4_out, global_pool_out], dim=1)
-            out = self.out_conv(out)
-
-            return out
+    def forward(self, x):
+        out = [stage(x) for stage in self.stages]
+        
+        # Global pooling branch needs upsampling
+        pool = self.global_pool(x)
+        pool = torch.nn.functional.interpolate(pool, size=x.shape[2:], mode='bilinear', align_corners=True)
+        out.append(pool)
+        
+        x = torch.cat(out, dim=1)
+        return self.bottleneck(x)
 
 class Decoder(nn.Module):
     """
@@ -187,17 +198,19 @@ class Decoder(nn.Module):
     def __init__(self, aspp_channels, low_level_channels, n_classes):
         super().__init__()
         self.reduce_low_level = nn.Sequential(
-            nn.Conv2d(low_level_channels, 64, kernel_size=1,bias=False),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(low_level_channels, 48, kernel_size=1,bias=False),
+            nn.BatchNorm2d(48),
             nn.ReLU(inplace=True)
         )
         self.fuse_conv = nn.Sequential(
-            nn.Conv2d(64 + aspp_channels, 256, kernel_size=3, padding=1,bias=False),
+            nn.Conv2d(48 + aspp_channels, 256, kernel_size=3, padding=1,bias=False),
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
             nn.Conv2d(256, 256, kernel_size=3, padding=1,bias=False),
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1)
         )
       
         self.out_conv = nn.Conv2d(256, n_classes, kernel_size=1)
@@ -238,6 +251,16 @@ class DeepLabV3Plus(nn.Module):
         # Backbone (ResNet-101)
         resnet = resnet101(weights=ResNet101_Weights.IMAGENET1K_V2)
         resnet.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        for module in resnet.layer3.modules():
+            if isinstance(module, nn.Conv2d):
+                # If it was a downsampling layer, stop it
+                if module.stride == (2, 2):
+                    module.stride = (1, 1)
+                # Increase dilation to compensate for the lost stride
+                # This keeps the "view" of the filters the same
+                if module.kernel_size == (3, 3):
+                    module.dilation = (2, 2)
+                    module.padding = (2, 2)
         for module in resnet.layer4.modules():
             if isinstance(module, nn.Conv2d):
                 # If it was a downsampling layer, stop it
@@ -248,15 +271,15 @@ class DeepLabV3Plus(nn.Module):
                 if module.kernel_size == (3, 3):
                     module.dilation = (2, 2)
                     module.padding = (2, 2)
-        self.low_level_features = nn.Sequential(*list(resnet.children())[:4])
-        self.high_level_features = nn.Sequential(*list(resnet.children())[4:-2])
+        self.low_level_features = nn.Sequential(*list(resnet.children())[:5])
+        self.high_level_features = nn.Sequential(*list(resnet.children())[5:-2])
 
 
         # ASPP module
-        self.aspp = ASPP(2048, 256)
+        self.aspp = ASPP(2048, 256,[12,24,36])  # Dilation rates of 6, 12, and 18 as in the original paper
 
         # Decoder
-        self.decoder = Decoder(256, 64, self.nclasses)
+        self.decoder = Decoder(256, 256, self.nclasses)
 
     def forward(self, x):
         """

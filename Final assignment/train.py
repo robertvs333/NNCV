@@ -162,7 +162,8 @@ def main(args):
     current_best_model_path = None
     for epoch in range(args.epochs):
         print(f"Epoch {epoch+1:04}/{args.epochs:04}")
-
+        if epoch == 5:  # Unfreeze the backbone after 5 epochs
+            optimizer.param_groups[0]['lr'] = args.lr  # Set the backbone learning rate to normal
         # Training
         model.train()
         for i, (images, labels) in enumerate(train_dataloader):
