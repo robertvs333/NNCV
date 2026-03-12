@@ -187,12 +187,12 @@ class Decoder(nn.Module):
     def __init__(self, aspp_channels, low_level_channels, n_classes):
         super().__init__()
         self.reduce_low_level = nn.Sequential(
-            nn.Conv2d(low_level_channels, 48, kernel_size=1,bias=False),
-            nn.BatchNorm2d(48),
+            nn.Conv2d(low_level_channels, 64, kernel_size=1,bias=False),
+            nn.BatchNorm2d(64),
             nn.ReLU(inplace=True)
         )
         self.fuse_conv = nn.Sequential(
-            nn.Conv2d(48 + aspp_channels, 256, kernel_size=3, padding=1,bias=False),
+            nn.Conv2d(64 + aspp_channels, 256, kernel_size=3, padding=1,bias=False),
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
             nn.Conv2d(256, 256, kernel_size=3, padding=1,bias=False),
@@ -248,15 +248,15 @@ class DeepLabV3Plus(nn.Module):
                 if module.kernel_size == (3, 3):
                     module.dilation = (2, 2)
                     module.padding = (2, 2)
-        self.low_level_features = nn.Sequential(*list(resnet.children())[:5])
-        self.high_level_features = nn.Sequential(*list(resnet.children())[5:-2])
+        self.low_level_features = nn.Sequential(*list(resnet.children())[:4])
+        self.high_level_features = nn.Sequential(*list(resnet.children())[4:-2])
 
 
         # ASPP module
         self.aspp = ASPP(2048, 256)
 
         # Decoder
-        self.decoder = Decoder(256, 256, self.nclasses)
+        self.decoder = Decoder(256, 64, self.nclasses)
 
     def forward(self, x):
         """
