@@ -203,9 +203,11 @@ class Decoder(nn.Module):
             nn.ReLU(inplace=True)
         )
         self.fuse_conv = nn.Sequential(
-            nn.AtrousConv2d(128 + aspp_channels, 256, kernel_size=3, padding=1,bias=False),
+            # Use the custom class we defined earlier
+            # It handles Depthwise + Pointwise + BN + ReLU internally
+            AtrousSeparableConv(128 + aspp_channels, 256, kernel_size=3, padding=1, dilation=1, bias=False),
             nn.Dropout(0.5),
-            nn.AtrousConv2d(256, 256, kernel_size=3, padding=1,bias=False),
+            AtrousSeparableConv(256, 256, kernel_size=3, padding=1, dilation=1, bias=False),
             nn.Dropout(0.3)
         )
       
