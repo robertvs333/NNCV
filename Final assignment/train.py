@@ -153,7 +153,7 @@ def main(args):
 
     # Define optimizer with different rates
     optimizer = AdamW([
-        {'params': backbone_params, 'lr': args.lr * 0.1}, # 10x smaller for the backbone
+        {'params': backbone_params, 'lr': args.lr * 0.0}, # 10x smaller for the backbone
         {'params': head_params, 'lr': args.lr}            # Normal rate for the heads
     ], weight_decay=5e-2)
    
