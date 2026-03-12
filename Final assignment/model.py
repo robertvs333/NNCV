@@ -198,19 +198,15 @@ class Decoder(nn.Module):
     def __init__(self, aspp_channels, low_level_channels, n_classes):
         super().__init__()
         self.reduce_low_level = nn.Sequential(
-            nn.Conv2d(low_level_channels, 48, kernel_size=1,bias=False),
-            nn.BatchNorm2d(48),
+            nn.Conv2d(low_level_channels, 128, kernel_size=1,bias=False),
+            nn.BatchNorm2d(128),
             nn.ReLU(inplace=True)
         )
         self.fuse_conv = nn.Sequential(
-            nn.Conv2d(48 + aspp_channels, 256, kernel_size=3, padding=1,bias=False),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
+            nn.AtrousConv2d(128 + aspp_channels, 256, kernel_size=3, padding=1,bias=False),
             nn.Dropout(0.5),
-            nn.Conv2d(256, 256, kernel_size=3, padding=1,bias=False),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.1)
+            nn.AtrousConv2d(256, 256, kernel_size=3, padding=1,bias=False),
+            nn.Dropout(0.3)
         )
       
         self.out_conv = nn.Conv2d(256, n_classes, kernel_size=1)
