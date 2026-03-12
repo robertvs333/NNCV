@@ -140,18 +140,18 @@ class ASPP(nn.Module):
                 nn.ReLU(inplace=True)
             )
             self.branch2 = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=2, dilation=2),
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=6, dilation=6),
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(inplace=True)
             )
             
             self.branch3= nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=4, dilation=4),
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=12, dilation=12),
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(inplace=True)
             )
             self.branch4 = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=6, dilation=6),
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=18, dilation=18),
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(inplace=True)
             )
