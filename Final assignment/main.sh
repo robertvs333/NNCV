@@ -7,4 +7,4 @@ python3 train.py \
     --lr 0.0001 \
     --num-workers 10 \
     --seed 42 \
-    --experiment-id "DeepLabV3+-v7-training" \
+    --experiment-id "DeepLabV3+-v8-training" \

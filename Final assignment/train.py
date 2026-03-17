@@ -155,7 +155,7 @@ def main(args):
     optimizer = AdamW([
         {'params': backbone_params, 'lr': args.lr * 0.0}, # 10x smaller for the backbone
         {'params': head_params, 'lr': args.lr}            # Normal rate for the heads
-    ], weight_decay=1e-4)
+    ])
    
     # Training loop
     best_valid_loss = float('inf')
@@ -181,7 +181,7 @@ def main(args):
 
             wandb.log({
                 "train_loss": loss.item(),
-                "learning_rate": optimizer.param_groups[0]['lr'],
+                "learning_rate": optimizer.param_groups[1]['lr'],
                 "epoch": epoch + 1,
             }, step=epoch * len(train_dataloader) + i)
             
