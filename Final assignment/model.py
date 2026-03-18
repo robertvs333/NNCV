@@ -198,14 +198,14 @@ class Decoder(nn.Module):
     def __init__(self, aspp_channels, low_level_channels, n_classes):
         super().__init__()
         self.reduce_low_level = nn.Sequential(
-            nn.Conv2d(low_level_channels, 128, kernel_size=1,bias=False),
-            nn.BatchNorm2d(128),
+            nn.Conv2d(low_level_channels, 48, kernel_size=1,bias=False),
+            nn.BatchNorm2d(48),
             nn.ReLU(inplace=True)
         )
         self.fuse_conv = nn.Sequential(
             # Use the custom class we defined earlier
             # It handles Depthwise + Pointwise + BN + ReLU internally
-            AtrousSeparableConv(128 + aspp_channels, 256, kernel_size=3, padding=1, dilation=1, bias=False),
+            AtrousSeparableConv(48 + aspp_channels, 256, kernel_size=3, padding=1, dilation=1, bias=False),
             nn.Dropout(0.5),
             AtrousSeparableConv(256, 256, kernel_size=3, padding=1, dilation=1, bias=False),
             nn.Dropout(0.3)
@@ -267,8 +267,8 @@ class DeepLabV3Plus(nn.Module):
                 # Increase dilation to compensate for the lost stride
                 # This keeps the "view" of the filters the same
                 if module.kernel_size == (3, 3):
-                    module.dilation = (2, 2)
-                    module.padding = (2, 2)
+                    module.dilation = (4, 4)
+                    module.padding = (4, 4)
         self.low_level_features = nn.Sequential(*list(resnet.children())[:5])
         self.high_level_features = nn.Sequential(*list(resnet.children())[5:-2])
 

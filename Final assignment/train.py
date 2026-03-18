@@ -28,8 +28,10 @@ from torchvision.transforms.v2 import (
     Resize,
     ToImage,
     ToDtype,
-    InterpolationMode
+    InterpolationMode,
+    RandomCrop
 )
+import torchvision.transforms.v2.functional as TF 
 
 from model import Model, DeepLabV3Plus
 
@@ -69,7 +71,41 @@ def get_args_parser():
 
     return parser
 
+class JointTransform:
+    def __init__(self, crop_size=513, is_train=True):
+        self.crop_size = crop_size
+        self.is_train = is_train
 
+    def __call__(self, image, target):
+        # 1. Convert PIL images to tensors
+        image = TF.to_image(image)
+        target = TF.to_image(target)
+
+        # 2. Resize maintaining aspect ratio! 
+        # By passing a single int (self.crop_size) instead of a tuple (512, 512),
+        # PyTorch resizes the shorter edge to 513. 1024x2048 becomes 513x1026.
+        image = TF.resize(image, self.crop_size, interpolation=InterpolationMode.BILINEAR)
+        target = TF.resize(target, self.crop_size, interpolation=InterpolationMode.NEAREST)
+
+        # 3. Apply the Crop
+        if self.is_train:
+            # Generate random coordinates once...
+            i, j, h, w = RandomCrop.get_params(image, output_size=(self.crop_size, self.crop_size))
+            # ...and apply them to BOTH image and mask
+            image = TF.crop(image, i, j, h, w)
+            target = TF.crop(target, i, j, h, w)
+        else:
+            # For validation, we just take the center to keep it consistent
+            image = TF.center_crop(image, output_size=(self.crop_size, self.crop_size))
+            target = TF.center_crop(target, output_size=(self.crop_size, self.crop_size))
+
+        # 4. Final Formatting
+        image = TF.to_dtype(image, torch.float32, scale=True)
+        image = TF.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        
+        target = TF.to_dtype(target, torch.int64)
+
+        return image, target
 
 def main(args):
     # Initialize wandb for logging
@@ -110,12 +146,12 @@ def main(args):
 
     # Load the dataset and make a split for training and validation
     train_dataset = Cityscapes(
-    args.data_dir,
-    split="train",
-    mode="fine",
-    target_type="semantic",
-    transform=img_transform,
-    target_transform=target_transform,
+        args.data_dir,
+        split="train",
+        mode="fine",
+        target_type="semantic",
+        # Use the plural 'transforms' argument!
+        transforms=JointTransform(crop_size=513, is_train=True),
     )
 
     valid_dataset = Cityscapes(
@@ -123,8 +159,8 @@ def main(args):
         split="val",
         mode="fine",
         target_type="semantic",
-        transform=img_transform,
-        target_transform=target_transform,
+        # Use center crop for validation
+        transforms=JointTransform(crop_size=513, is_train=False),
     )
 
     train_dataloader = DataLoader(
