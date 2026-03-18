@@ -152,18 +152,27 @@ def main(args):
     head_params = list(model.aspp.parameters()) + list(model.decoder.parameters())
 
     # Define optimizer with different rates
-    optimizer = AdamW([
+    #optimizer = AdamW([
+    #    {'params': backbone_params, 'lr': args.lr * 0.0}, # 10x smaller for the backbone
+    #    {'params': head_params, 'lr': args.lr}            # Normal rate for the heads
+    #])
+    optimizer=SGD([
         {'params': backbone_params, 'lr': args.lr * 0.0}, # 10x smaller for the backbone
         {'params': head_params, 'lr': args.lr}            # Normal rate for the heads
-    ])
+    ], momentum=0.9, weight_decay=1e-4)
+   #scheduler 
+    max_iters = len(train_loader) * total_epochs
+    poly_lambda = lambda current_iter: (1 - current_iter / max_iters) ** 0.9
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=poly_lambda)
+
    
     # Training loop
     best_valid_loss = float('inf')
     current_best_model_path = None
     for epoch in range(args.epochs):
         print(f"Epoch {epoch+1:04}/{args.epochs:04}")
-        #if epoch == 5:  # Unfreeze the backbone after 5 epochs
-        #    optimizer.param_groups[0]['lr'] = args.lr  # Set the backbone learning rate to normal
+        if epoch == 5:  # Unfreeze the backbone after 5 epochs
+            optimizer.param_groups[0]['lr'] = args.lr*0.1  # Set the backbone learning rate to normal
         # Training
         model.train()
         for i, (images, labels) in enumerate(train_dataloader):
@@ -178,6 +187,7 @@ def main(args):
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
+            scheduler.step()  # Step the scheduler
 
             wandb.log({
                 "train_loss": loss.item(),
