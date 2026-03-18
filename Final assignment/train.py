@@ -18,7 +18,7 @@ from argparse import ArgumentParser
 import wandb
 import torch
 import torch.nn as nn
-from torch.optim import AdamW
+from torch.optim import AdamW, SGD
 from torch.utils.data import DataLoader
 from torchvision.datasets import Cityscapes
 from torchvision.utils import make_grid
@@ -70,6 +70,7 @@ def get_args_parser():
     return parser
 
 
+
 def main(args):
     # Initialize wandb for logging
     wandb.init(
@@ -96,7 +97,8 @@ def main(args):
     ToImage(),
     Resize((512, 512), interpolation=InterpolationMode.BILINEAR),
     ToDtype(torch.float32, scale=True),
-    Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    #Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
     # Target transform (mask)
@@ -156,14 +158,26 @@ def main(args):
     #    {'params': backbone_params, 'lr': args.lr * 0.0}, # 10x smaller for the backbone
     #    {'params': head_params, 'lr': args.lr}            # Normal rate for the heads
     #])
+    def backbone_lambda(current_iter):
+        current_epoch = current_iter // len(train_dataloader)
+        if current_epoch < 5:
+            return 0.0  # Keep frozen for first 5 epochs
+        else:
+            return (1 - current_iter / max_iters) ** 0.9  # Poly decay after epoch 5
+
+    def head_lambda(current_iter):
+            return (1 - current_iter / max_iters) ** 0.9 # Poly decay from day 1
+
     optimizer=SGD([
-        {'params': backbone_params, 'lr': args.lr * 0.0}, # 10x smaller for the backbone
+        {'params': backbone_params, 'lr': args.lr * 0.1}, # 10x smaller for the backbone
         {'params': head_params, 'lr': args.lr}            # Normal rate for the heads
     ], momentum=0.9, weight_decay=1e-4)
    #scheduler 
-    max_iters = len(train_loader) * total_epochs
-    poly_lambda = lambda current_iter: (1 - current_iter / max_iters) ** 0.9
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=poly_lambda)
+    max_iters = len(train_dataloader) * args.epochs
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer, 
+        lr_lambda=[backbone_lambda, head_lambda]
+    )
 
    
     # Training loop
@@ -171,8 +185,6 @@ def main(args):
     current_best_model_path = None
     for epoch in range(args.epochs):
         print(f"Epoch {epoch+1:04}/{args.epochs:04}")
-        if epoch == 5:  # Unfreeze the backbone after 5 epochs
-            optimizer.param_groups[0]['lr'] = args.lr*0.1  # Set the backbone learning rate to normal
         # Training
         model.train()
         for i, (images, labels) in enumerate(train_dataloader):
