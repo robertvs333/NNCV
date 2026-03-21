@@ -31,10 +31,45 @@ from torchvision.transforms.v2 import (
     InterpolationMode,
     RandomCrop
 )
-import torchvision.transforms.v2.functional as TF 
+import torchvision.transforms.v2.functional as TF
+import torch.nn.functional as F
 
 from model import Model, DeepLabV3Plus
 
+import torch.nn.functional as F
+
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=None, gamma=2.0, ignore_index=255, reduction='mean'):
+        super().__init__()
+        # alpha: Tensor of class weights (like the Cityscapes weights)
+        # gamma: The "volume knob" to squash easy examples (default 2.0 is standard)
+        self.alpha = alpha
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        # 1. Compute the log probabilities (log_pt) and probabilities (pt) for all classes
+        log_pt = F.log_softmax(inputs, dim=1)
+        pt = torch.exp(log_pt)
+
+        # 2. Calculate the focal weight: (1 - p_t)^gamma
+        focal_weight = (1 - pt) ** self.gamma
+
+        # 3. Multiply the log probabilities by the focal weight
+        weighted_log_pt = focal_weight * log_pt
+
+        # 4. Use standard NLLLoss to extract the true target classes, 
+        #    apply the alpha class weights, and ignore the void index (255)
+        loss = F.nll_loss(
+            weighted_log_pt, 
+            targets, 
+            weight=self.alpha, 
+            ignore_index=self.ignore_index, 
+            reduction=self.reduction
+        )
+
+        return loss
 
 # Mapping class IDs to train IDs
 id_to_trainid = {cls.id: cls.train_id for cls in Cityscapes.classes}
@@ -151,7 +186,7 @@ def main(args):
         mode="fine",
         target_type="semantic",
         # Use the plural 'transforms' argument!
-        transforms=JointTransform(crop_size=513, is_train=True),
+        transforms=JointTransform(crop_size=769, is_train=True),
     )
 
     valid_dataset = Cityscapes(
@@ -160,7 +195,7 @@ def main(args):
         mode="fine",
         target_type="semantic",
         # Use center crop for validation
-        transforms=JointTransform(crop_size=513, is_train=False),
+        transforms=JointTransform(crop_size=769, is_train=False),
     )
 
     train_dataloader = DataLoader(
@@ -182,18 +217,21 @@ def main(args):
         n_classes=19,  # 19 classes in the Cityscapes dataset
     ).to(device)
 
-    # Define the loss function
-    criterion = nn.CrossEntropyLoss(ignore_index=255)  # Ignore the void class
+
 
     # Separate the parameters
     backbone_params = list(model.low_level_features.parameters()) + list(model.high_level_features.parameters())
     head_params = list(model.aspp.parameters()) + list(model.decoder.parameters())
 
-    # Define optimizer with different rates
-    #optimizer = AdamW([
-    #    {'params': backbone_params, 'lr': args.lr * 0.0}, # 10x smaller for the backbone
-    #    {'params': head_params, 'lr': args.lr}            # Normal rate for the heads
-    #])
+
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs for training!")
+        model = nn.DataParallel(model)
+
+    # Define the loss function
+    #criterion = nn.CrossEntropyLoss(ignore_index=255)  # Ignore the void class
+    criterion = FocalLoss(ignore_index=255, gamma=2.0)  # Ignore the void class
+    
     def backbone_lambda(current_iter):
         current_epoch = current_iter // len(train_dataloader)
         if current_epoch < 5:
@@ -291,16 +329,18 @@ def main(args):
                     output_dir, 
                     f"best_model-epoch={epoch:04}-val_loss={valid_loss:04}.pt"
                 )
-                torch.save(model.state_dict(), current_best_model_path)
+                model_to_save = model.module if hasattr(model, 'module') else model
+                torch.save(model_to_save.state_dict(), current_best_model_path)
         
     print("Training complete!")
 
     # Save the model
+    model_to_save = model.module if hasattr(model, 'module') else model
     torch.save(
-        model.state_dict(),
+        model_to_save.state_dict(),
         os.path.join(
             output_dir,
-            f"final_model-epoch={epoch:04}-val_loss={valid_loss:04}.pt"
+            f"final_model-epoch={epoch:04}-val_loss={valid_loss:.4}.pt" # Fixed string format!
         )
     )
     wandb.finish()
