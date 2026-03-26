@@ -214,8 +214,8 @@ def main(args):
         model = nn.DataParallel(model)
 
     # Define the loss function
-    #criterion = nn.CrossEntropyLoss(ignore_index=255)  # Ignore the void class
-    criterion = FocalLoss(ignore_index=255, gamma=2.0)  # Ignore the void class
+    criterion = nn.CrossEntropyLoss(ignore_index=255)  # Ignore the void class
+    #criterion = FocalLoss(ignore_index=255, gamma=2.0)  # Ignore the void class
     
     def backbone_lambda(current_iter):
         current_epoch = current_iter // len(train_dataloader)
