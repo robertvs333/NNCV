@@ -233,7 +233,8 @@ class DeepLabV3Plus(nn.Module):
     to create the model, so make sure to set the default values of the constructor to the ones you want to use for your submission.
     """
     def __init__(
-        self, 
+        self,
+        Resnet_weights=True, 
         in_channels=3, 
         n_classes=19
     ):
@@ -247,7 +248,10 @@ class DeepLabV3Plus(nn.Module):
         super().__init__()
 
         # Backbone (ResNet-101)
-        resnet = resnet101(weights=ResNet101_Weights.IMAGENET1K_V2)
+        if Resnet_weights:
+            resnet = resnet101(weights=ResNet101_Weights.IMAGENET1K_V2)
+        else: 
+            resnet = resnet101(weights=None)
         resnet.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
         for module in resnet.layer3.modules():
             if isinstance(module, nn.Conv2d):

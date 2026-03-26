@@ -22,7 +22,7 @@ from torchvision.transforms.v2 import (
     InterpolationMode,
 )
 
-from model import Model
+from model import DeepLabV3Plus, Model
 
 # Fixed paths inside participant container
 # Do NOT chnage the paths, these are fixed locations where the server will 
@@ -39,9 +39,9 @@ def preprocess(img: Image.Image) -> torch.Tensor:
     # Return a tensor suitable for model input
     transform = Compose([
         ToImage(),
-        Resize(size=(512, 512), interpolation=InterpolationMode.BILINEAR),
+        Resize(size=(769, 1538), interpolation=InterpolationMode.BILINEAR),
         ToDtype(dtype=torch.float32, scale=True),
-        Normalize(mean=(0.5,), std=(0.5,)),
+        Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
     img = transform(img)
@@ -67,7 +67,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Load model
-    model = Model()
+    model = DeepLabV3Plus(Resnet_weights=False)
     state_dict = torch.load(
         MODEL_PATH, 
         map_location=device,
@@ -89,13 +89,10 @@ def main():
 
             # Preprocess
             img_tensor = preprocess(img).to(device)
-
-            # Forward pass
             pred = model(img_tensor)
 
             # Postprocess to segmentation mask
             seg_pred = postprocess(pred, original_shape)
-
             # Create mirrored output folder
             out_path = Path(OUTPUT_DIR) / img_path.name
             out_path.parent.mkdir(parents=True, exist_ok=True)

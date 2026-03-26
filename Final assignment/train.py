@@ -163,21 +163,6 @@ def main(args):
     # Define the device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Define the transforms to apply to the data
-    img_transform = Compose([
-    ToImage(),
-    Resize((512, 512), interpolation=InterpolationMode.BILINEAR),
-    ToDtype(torch.float32, scale=True),
-    #Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-    Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    # Target transform (mask)
-    target_transform = Compose([
-        ToImage(),
-        Resize((512, 512), interpolation=InterpolationMode.NEAREST),
-        ToDtype(torch.int64),  # no scaling
-    ])
 
     # Load the dataset and make a split for training and validation
     train_dataset = Cityscapes(
