@@ -12,6 +12,8 @@ allowing you to easily modify hyperparameters using a command-line argument pars
 
 Feel free to customize the script as needed for your use case.
 """
+
+MODEL_PATH = "/app/model.pt"
 import os
 from argparse import ArgumentParser
 
@@ -200,8 +202,19 @@ def main(args):
     model = DeepLabV3Plus(
         in_channels=3,  # RGB images
         n_classes=19,  # 19 classes in the Cityscapes dataset
-    ).to(device)
+        Resnet_weights=False,  # Use pretrained weights for the backbone
+    )
+    state_dict = torch.load(
+        MODEL_PATH, 
+        map_location=device,
+        weights_only=True,
+    )
+    model.load_state_dict(
+        state_dict, 
+        strict=True,  # Ensure the state dict matches the model architecture
+    )
 
+    model.to(device)
 
 
     # Separate the parameters
@@ -218,11 +231,11 @@ def main(args):
     #criterion = FocalLoss(ignore_index=255, gamma=2.0)  # Ignore the void class
     
     def backbone_lambda(current_iter):
-        current_epoch = current_iter // len(train_dataloader)
-        if current_epoch < 5:
-            return 0.0  # Keep frozen for first 5 epochs
-        else:
-            return (1 - current_iter / max_iters) ** 0.9  # Poly decay after epoch 5
+        #current_epoch = current_iter // len(train_dataloader)
+        #if current_epoch < 5:
+        #    return 0.0  # Keep frozen for first 5 epochs
+        #else:
+        return (1 - current_iter / max_iters) ** 0.9  # Poly decay after epoch 5
 
     def head_lambda(current_iter):
             return (1 - current_iter / max_iters) ** 0.9 # Poly decay from day 1
