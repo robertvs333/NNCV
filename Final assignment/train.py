@@ -13,7 +13,7 @@ allowing you to easily modify hyperparameters using a command-line argument pars
 Feel free to customize the script as needed for your use case.
 """
 
-MODEL_PATH = "/app/model.pt"
+MODEL_PATH = "model.pt"
 import os
 from argparse import ArgumentParser
 
@@ -227,7 +227,17 @@ def main(args):
         model = nn.DataParallel(model)
 
     # Define the loss function
-    criterion = nn.CrossEntropyLoss(ignore_index=255)  # Ignore the void class
+    # 1. Define the smoothed heuristic weights for Cityscapes
+    cityscapes_weights = torch.tensor([
+        0.05, 0.05, 0.05, # 0, 1, 2: Road, Sidewalk, Building (Massive classes)
+        0.20, 0.20, 0.20, # 3, 4, 5: Wall, Fence, Pole (Thin/Medium classes)
+        0.80, 0.80,       # 6, 7: Traffic Light, Traffic Sign (Tiny classes)
+        0.05, 0.10,       # 8, 9: Vegetation, Terrain
+        0.05, 0.30, 0.50, # 10, 11, 12: Sky, Person, Rider
+        0.10, 0.40, 0.80, # 13, 14, 15: Car, Truck, Bus
+        0.80, 0.80, 0.80  # 16, 17, 18: Train, Motorcycle, Bicycle
+    ], dtype=torch.float32).to(device)
+    criterion = nn.CrossEntropyLoss(ignore_index=255, weight=cityscapes_weights)  # Ignore the void class
     #criterion = FocalLoss(ignore_index=255, gamma=2.0)  # Ignore the void class
     
     def backbone_lambda(current_iter):

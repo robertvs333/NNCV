@@ -12,7 +12,7 @@ from model import DeepLabV3Plus
 
 # 1. Configuration
 DATA_DIR = "./data/cityscapes" # Change to your local Cityscapes path
-MODEL_PATH = "model.pt" # Change to your 0.24 loss model
+MODEL_PATH = "model2.pt" # Change to your 0.24 loss model
 NUM_CLASSES = 19
 IGNORE_INDEX = 255
 
