@@ -31,7 +31,8 @@ from torchvision.transforms.v2 import (
     ToImage,
     ToDtype,
     InterpolationMode,
-    RandomCrop
+    RandomCrop,
+    ColorJitter,
 )
 import torchvision.transforms.v2.functional as TF
 import torch.nn.functional as F
@@ -105,6 +106,9 @@ def get_args_parser():
     parser.add_argument("--num-workers", type=int, default=10, help="Number of workers for data loaders")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--experiment-id", type=str, default="unet-training", help="Experiment ID for Weights & Biases")
+    parser.add_argument("--loss-function", type=str, default="focal", choices=["focal", "cross_entropy", "cross_entropy_weighted"], help="Select Focal Loss or Cross Entropy Loss")
+    parser.add_argument("--model-arch", type=str, default="deeplabv3plus", choices=["deeplabv3plus", "unet"], help="Model architecture to use")
+    parser.add_argument("--continue-from", type=str, default=None, help="Path to a checkpoint to continue training from")
 
     return parser
 
@@ -112,6 +116,7 @@ class JointTransform:
     def __init__(self, crop_size=513, is_train=True):
         self.crop_size = crop_size
         self.is_train = is_train
+        self.color_jitter = ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
 
     def __call__(self, image, target):
         # 1. Convert PIL images to tensors
@@ -131,6 +136,10 @@ class JointTransform:
             # ...and apply them to BOTH image and mask
             image = TF.crop(image, i, j, h, w)
             target = TF.crop(target, i, j, h, w)
+            if torch.rand(1) < 0.5:  # Random horizontal flip with 50% chance
+                image = TF.hflip(image)
+                target = TF.hflip(target)
+            image = self.color_jitter(image)
         else:
             # For validation, we just take the center to keep it consistent
             image = TF.center_crop(image, output_size=(self.crop_size, self.crop_size))
@@ -173,7 +182,7 @@ def main(args):
         mode="fine",
         target_type="semantic",
         # Use the plural 'transforms' argument!
-        transforms=JointTransform(crop_size=769, is_train=True),
+        transforms=JointTransform(crop_size=513, is_train=True),
     )
 
     valid_dataset = Cityscapes(
@@ -182,7 +191,7 @@ def main(args):
         mode="fine",
         target_type="semantic",
         # Use center crop for validation
-        transforms=JointTransform(crop_size=769, is_train=False),
+        transforms=JointTransform(crop_size=513, is_train=False),
     )
 
     train_dataloader = DataLoader(
@@ -199,32 +208,32 @@ def main(args):
     )
 
     # Define the model
-    model = DeepLabV3Plus(
-        in_channels=3,  # RGB images
-        n_classes=19,  # 19 classes in the Cityscapes dataset
-        Resnet_weights=False,  # Use pretrained weights for the backbone
-    )
-    state_dict = torch.load(
-        MODEL_PATH, 
-        map_location=device,
-        weights_only=True,
-    )
-    model.load_state_dict(
-        state_dict, 
-        strict=True,  # Ensure the state dict matches the model architecture
-    )
+    if args.model_arch == "unet":
+        model = Model()
+    elif args.model_arch == "deeplabv3plus":
+        if args.continue_from is None:
+            model = DeepLabV3Plus(
+                in_channels=3,  # RGB images
+                n_classes=19,  # 19 classes in the Cityscapes dataset
+                Resnet_weights=True,  # Use pretrained weights for the backbone
+            )
+        else:
+            model = DeepLabV3Plus(
+                in_channels=3,  # RGB images
+                n_classes=19,
+                Resnet_weights=False,  # Don't load pretrained weights for the backbone
+            )
+            state_dict = torch.load(
+                args.continue_from, 
+                map_location=device,
+                weights_only=True,
+            )
+            model.load_state_dict(
+                state_dict, 
+                strict=True,  # Ensure the state dict matches the model architecture
+            )
 
     model.to(device)
-
-
-    # Separate the parameters
-    backbone_params = list(model.low_level_features.parameters()) + list(model.high_level_features.parameters())
-    head_params = list(model.aspp.parameters()) + list(model.decoder.parameters())
-
-
-    if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs for training!")
-        model = nn.DataParallel(model)
 
     # Define the loss function
     # 1. Define the smoothed heuristic weights for Cityscapes
@@ -237,9 +246,15 @@ def main(args):
         0.10, 0.40, 0.80, # 13, 14, 15: Car, Truck, Bus
         0.80, 0.80, 0.80  # 16, 17, 18: Train, Motorcycle, Bicycle
     ], dtype=torch.float32).to(device)
-    criterion = nn.CrossEntropyLoss(ignore_index=255, weight=cityscapes_weights)  # Ignore the void class
-    #criterion = FocalLoss(ignore_index=255, gamma=2.0)  # Ignore the void class
+    if args.loss_function == "cross_entropy_weighted":
+        criterion = nn.CrossEntropyLoss(ignore_index=255, weight=cityscapes_weights)  # Ignore the void class
+    elif args.loss_function == "focal":
+        criterion = FocalLoss(ignore_index=255, gamma=2.0)  # Ignore the void class
+    elif args.loss_function == "cross_entropy":
+        criterion = nn.CrossEntropyLoss(ignore_index=255)  # Ignore the void class
     
+    max_iters = len(train_dataloader) * args.epochs
+
     def backbone_lambda(current_iter):
         #current_epoch = current_iter // len(train_dataloader)
         #if current_epoch < 5:
@@ -249,19 +264,26 @@ def main(args):
 
     def head_lambda(current_iter):
             return (1 - current_iter / max_iters) ** 0.9 # Poly decay from day 1
-
-    optimizer=SGD([
-        {'params': backbone_params, 'lr': args.lr * 0.1}, # 10x smaller for the backbone
-        {'params': head_params, 'lr': args.lr}            # Normal rate for the heads
-    ], momentum=0.9, weight_decay=1e-4)
+    scheduler = None
+    if args.model_arch == "unet":
+        optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    elif args.model_arch == "deeplabv3plus":
+        # Separate backbone and head parameters
+        backbone_params = list(model.low_level_features.parameters()) + list(model.high_level_features.parameters())
+        head_params = list(model.aspp.parameters()) + list(model.decoder.parameters())
+        optimizer=SGD([
+            {'params': backbone_params, 'lr': args.lr * 0.1}, # 10x smaller for the backbone
+            {'params': head_params, 'lr': args.lr}            # Normal rate for the heads
+        ], momentum=0.9, weight_decay=1e-4)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, 
+            lr_lambda=[backbone_lambda, head_lambda]
+        )
    #scheduler 
-    max_iters = len(train_dataloader) * args.epochs
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer, 
-        lr_lambda=[backbone_lambda, head_lambda]
-    )
-
-   
+    
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs for training!")
+        model = nn.DataParallel(model)
     # Training loop
     best_valid_loss = float('inf')
     current_best_model_path = None
@@ -281,11 +303,12 @@ def main(args):
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-            scheduler.step()  # Step the scheduler
+            if scheduler is not None:
+                scheduler.step()  # Step the scheduler
 
             wandb.log({
                 "train_loss": loss.item(),
-                "learning_rate": optimizer.param_groups[1]['lr'],
+                "learning_rate": optimizer.param_groups[-1]['lr'],
                 "epoch": epoch + 1,
             }, step=epoch * len(train_dataloader) + i)
             

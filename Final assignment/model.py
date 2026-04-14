@@ -253,7 +253,7 @@ class DeepLabV3Plus(nn.Module):
         else: 
             resnet = resnet101(weights=None)
         resnet.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        for module in resnet.layer3.modules():
+        for module in resnet.layer4.modules():
             if isinstance(module, nn.Conv2d):
                 # If it was a downsampling layer, stop it
                 if module.stride == (2, 2):
@@ -263,22 +263,12 @@ class DeepLabV3Plus(nn.Module):
                 if module.kernel_size == (3, 3):
                     module.dilation = (2, 2)
                     module.padding = (2, 2)
-        for module in resnet.layer4.modules():
-            if isinstance(module, nn.Conv2d):
-                # If it was a downsampling layer, stop it
-                if module.stride == (2, 2):
-                    module.stride = (1, 1)
-                # Increase dilation to compensate for the lost stride
-                # This keeps the "view" of the filters the same
-                if module.kernel_size == (3, 3):
-                    module.dilation = (4, 4)
-                    module.padding = (4, 4)
         self.low_level_features = nn.Sequential(*list(resnet.children())[:5])
         self.high_level_features = nn.Sequential(*list(resnet.children())[5:-2])
 
 
         # ASPP module
-        self.aspp = ASPP(2048, 256,[12,24,36])  # Dilation rates of 6, 12, and 18 as in the original paper
+        self.aspp = ASPP(2048, 256,[6,12,18])  # Dilation rates of 6, 12, and 18 as in the original paper
 
         # Decoder
         self.decoder = Decoder(256, 256, self.nclasses)

@@ -1,18 +1,9 @@
-"""
-This script provides and example implementation of a prediction pipeline 
-for a PyTorch U-Net model. It loads a pre-trained model, processes input 
-images, and saves the predicted segmentation masks. 
-
-You can use this file for submissions to the Challenge server. Customize 
-the `preprocess` and `postprocess` functions to fit your model's input 
-and output requirements.
-"""
 from pathlib import Path
-
 import torch
 import torch.nn as nn
 import numpy as np
 from PIL import Image
+import torchvision.transforms.v2.functional as F
 from torchvision.transforms.v2 import (
     Compose, 
     ToImage, 
@@ -22,45 +13,58 @@ from torchvision.transforms.v2 import (
     InterpolationMode,
 )
 
-from model import DeepLabV3Plus, Model
+from model import DeepLabV3Plus # Ensure this matches your local file
 
-# Fixed paths inside participant container
-# Do NOT chnage the paths, these are fixed locations where the server will 
-# provide input data and expect output data.
-# Only for local testing, you can change these paths to point to your local data and output folders.
 IMAGE_DIR = "/data"
 OUTPUT_DIR = "/output"
 MODEL_PATH = "/app/model.pt"
 
-
 def preprocess(img: Image.Image) -> torch.Tensor:
-    # Implement your preprocessing steps here
-    # For example, resizing, normalization, etc.
-    # Return a tensor suitable for model input
+    # 1. Resize to the target wide canvas
+    img_resized = F.resize(img, size=(769, 1538), interpolation=InterpolationMode.BILINEAR)
+    
+    # 2. Extract Left and Right halves
+    # crop(img, top, left, height, width)
+    left_half = F.crop(img_resized, 0, 0, 769, 769)
+    right_half = F.crop(img_resized, 0, 769, 769, 769)
+    
+    # 3. Combine into a batch [2, 3, 769, 769]
+    batch = torch.stack([ToImage()(left_half), ToImage()(right_half)])
+    
+    # 4. Final normalization and dtype conversion
     transform = Compose([
-        ToImage(),
-        Resize(size=(769, 1538), interpolation=InterpolationMode.BILINEAR),
         ToDtype(dtype=torch.float32, scale=True),
         Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
-
-    img = transform(img)
-    img = img.unsqueeze(0)  # Add batch dimension
-    return img
+    
+    return transform(batch)
 
 
 def postprocess(pred: torch.Tensor, original_shape: tuple) -> np.ndarray:
-    # Implement your postprocessing steps here
-    # For example, resizing back to original shape, converting to color mask, etc.
-    # Return a numpy array suitable for saving as an image
+    """
+    pred: Tensor of shape [2, C, 769, 769] (Batch of 2: Left and Right)
+    original_shape: (Height, Width)
+    """
+    # 1. Get class predictions for both halves
     pred_soft = nn.Softmax(dim=1)(pred)
-    pred_max = torch.argmax(pred_soft, dim=1, keepdim=True)  # Get the class with the highest probability
-    prediction = Resize(size=original_shape, interpolation=InterpolationMode.NEAREST)(pred_max)
+    pred_max = torch.argmax(pred_soft, dim=1)  # Shape: [2, 769, 769]
+
+    # 2. Stitch the two 769x769 halves horizontally back to 1538x769
+    # Dim 1 is width here because batch dim was removed by argmax
+    stitched_mask = torch.cat([pred_max[0], pred_max[1]], dim=1) 
+    
+    # 3. Add batch and channel dims for Resize: [1, 1, 769, 1538]
+    stitched_mask = stitched_mask.unsqueeze(0).unsqueeze(0)
+
+    # 4. Resize back to original image dimensions
+    prediction = F.resize(
+        stitched_mask, 
+        size=original_shape, 
+        interpolation=InterpolationMode.NEAREST
+    )
 
     prediction_numpy = prediction.cpu().detach().numpy()
-    prediction_numpy = prediction_numpy.squeeze()  # Remove batch and channel dimensions if necessary
-
-    return prediction_numpy
+    return prediction_numpy.squeeze().astype(np.uint8)
 
 
 def main():
@@ -73,32 +77,30 @@ def main():
         map_location=device,
         weights_only=True,
     )
-    model.load_state_dict(
-        state_dict, 
-        strict=True,  # Ensure the state dict matches the model architecture
-    )
+    model.load_state_dict(state_dict, strict=True)
     model.eval().to(device)
 
-    image_files = list(Path(IMAGE_DIR).glob("*.png"))  # DO NOT CHANGE, IMAGES WILL BE PROVIDED IN THIS FORMAT
+    image_files = list(Path(IMAGE_DIR).glob("*.png"))
     print(f"Found {len(image_files)} images to process.")
 
     with torch.no_grad():
         for img_path in image_files:
             img = Image.open(img_path)
-            original_shape = np.array(img).shape[:2]
+            original_shape = (img.height, img.width)
 
-            # Preprocess
-            img_tensor = preprocess(img).to(device)
-            pred = model(img_tensor)
+            # Preprocess returns a batch of 2 (Left/Right)
+            img_batch = preprocess(img).to(device)
+            
+            # Model processes both halves in one forward pass
+            pred = model(img_batch) # Output: [2, C, 769, 769]
 
-            # Postprocess to segmentation mask
+            # Postprocess handles stitching and final resize
             seg_pred = postprocess(pred, original_shape)
-            # Create mirrored output folder
+            
             out_path = Path(OUTPUT_DIR) / img_path.name
             out_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Save predicted mask
-            Image.fromarray(seg_pred.astype(np.uint8)).save(out_path)
+            Image.fromarray(seg_pred).save(out_path)
 
 
 if __name__ == "__main__":
