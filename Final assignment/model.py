@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torchvision.models import resnet101, ResNet101_Weights
+from torchvision.models import resnet101, ResNet101_Weights, ResNet50_Weights, resnet50
 
 
 class Model(nn.Module):
@@ -236,7 +236,8 @@ class DeepLabV3Plus(nn.Module):
         self,
         Resnet_weights=True, 
         in_channels=3, 
-        n_classes=19
+        n_classes=19,
+        Resnet_size=101,
     ):
         """
         Args:
@@ -249,9 +250,15 @@ class DeepLabV3Plus(nn.Module):
 
         # Backbone (ResNet-101)
         if Resnet_weights:
-            resnet = resnet101(weights=ResNet101_Weights.IMAGENET1K_V2)
+            if Resnet_size == 101:
+                resnet = resnet101(weights=ResNet101_Weights.IMAGENET1K_V2)
+            elif Resnet_size == 50:
+                resnet = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
         else: 
-            resnet = resnet101(weights=None)
+            if Resnet_size == 101:
+                resnet = resnet101(weights=None)
+            elif Resnet_size == 50:
+                resnet = resnet50(weights=None)
         resnet.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
         for module in resnet.layer4.modules():
             if isinstance(module, nn.Conv2d):

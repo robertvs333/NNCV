@@ -7,8 +7,7 @@ python3 train.py \
     --lr 0.04 \
     --num-workers 12 \
     --seed 42 \
-    --experiment-id "DeepLab_Focal_lr_64" \
+    --experiment-id "DeepLab_50_Focal_64" \
     --loss-function "focal"\
     --model-arch "deeplabv3plus" \
-    --resnet-size 101 \
-    --freeze-backbone
+    --resnet-size 50 \

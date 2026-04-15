@@ -41,6 +41,63 @@ from model import Model, DeepLabV3Plus
 
 import torch.nn.functional as F
 
+class CEDiceLoss(nn.Module):
+    def __init__(self, ignore_index=255, ce_weight=1.0, dice_weight=1.0, class_weights=None):
+        """
+        Combines Cross Entropy Loss and Dice Loss.
+        ce_weight: The multiplier for the CE loss component.
+        dice_weight: The multiplier for the Dice loss component.
+        """
+        super().__init__()
+        self.ignore_index = ignore_index
+        self.ce_weight = ce_weight
+        self.dice_weight = dice_weight
+        
+        # Standard Cross Entropy
+        self.ce = nn.CrossEntropyLoss(ignore_index=ignore_index, weight=class_weights)
+        
+        # Small constant to prevent division by zero
+        self.smooth = 1e-5 
+
+    def forward(self, logits, targets):
+        # 1. Calculate Standard Cross Entropy
+        ce_loss = self.ce(logits, targets)
+
+        # 2. Prepare for Dice Loss Calculation
+        # Convert logits to probabilities (Softmax)
+        probs = F.softmax(logits, dim=1)
+        
+        # Create a mask for valid pixels (ignore the 255s)
+        valid_mask = (targets != self.ignore_index).unsqueeze(1) # Shape: [B, 1, H, W]
+        
+        # 3. One-Hot Encode the Targets Safely
+        # PyTorch one_hot crashes if it sees index 255 for a 19-class model.
+        # So we temporarily clone targets and replace 255 with 0.
+        safe_targets = targets.clone()
+        safe_targets[targets == self.ignore_index] = 0
+        
+        # Convert to one-hot: [B, H, W] -> [B, H, W, C] -> [B, C, H, W]
+        targets_one_hot = F.one_hot(safe_targets, num_classes=logits.shape[1]).permute(0, 3, 1, 2).float()
+        
+        # 4. Apply the valid mask
+        # This completely zeros out the probabilities and targets wherever the original label was 255
+        probs = probs * valid_mask
+        targets_one_hot = targets_one_hot * valid_mask
+        
+        # 5. Calculate Dice Score
+        # Sum over batch, height, and width (dims 0, 2, 3), leaving the Class dimension
+        intersection = torch.sum(probs * targets_one_hot, dim=(0, 2, 3))
+        cardinality = torch.sum(probs + targets_one_hot, dim=(0, 2, 3))
+        
+        # Formula: (2 * Intersection) / (Prediction + Target)
+        dice_score = (2.0 * intersection + self.smooth) / (cardinality + self.smooth)
+        
+        # We want to MINIMIZE loss, so we return 1 - mean(dice_score)
+        dice_loss = 1.0 - torch.mean(dice_score)
+        
+        # 6. Combine and return
+        return (self.ce_weight * ce_loss) + (self.dice_weight * dice_loss)
+
 class FocalLoss(nn.Module):
     def __init__(self, alpha=None, gamma=2.0, ignore_index=255, reduction='mean'):
         super().__init__()
@@ -74,10 +131,18 @@ class FocalLoss(nn.Module):
 
         return loss
 
-# Mapping class IDs to train IDs
+# Mapping class IDs to train IDs (Keep this line!)
 id_to_trainid = {cls.id: cls.train_id for cls in Cityscapes.classes}
+
+# --- NEW VECTORIZED MAPPING ---
+mapping_tensor = torch.zeros(256, dtype=torch.long)
+for city_id, train_id in id_to_trainid.items():
+    mapping_tensor[city_id] = train_id
+
 def convert_to_train_id(label_img: torch.Tensor) -> torch.Tensor:
-    return label_img.apply_(lambda x: id_to_trainid[x])
+    # Vectorized GPU/CPU compatible replacement!
+    return mapping_tensor[label_img.long()]
+# ------------------------------
 
 # Mapping train IDs to color
 train_id_to_color = {cls.train_id: cls.color for cls in Cityscapes.classes if cls.train_id != 255}
@@ -106,9 +171,11 @@ def get_args_parser():
     parser.add_argument("--num-workers", type=int, default=10, help="Number of workers for data loaders")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--experiment-id", type=str, default="unet-training", help="Experiment ID for Weights & Biases")
-    parser.add_argument("--loss-function", type=str, default="focal", choices=["focal", "cross_entropy", "cross_entropy_weighted"], help="Select Focal Loss or Cross Entropy Loss")
+    parser.add_argument("--loss-function", type=str, default="focal", choices=["focal", "cross_entropy", "cross_entropy_weighted", "ce_dice"], help="Select Focal Loss or Cross Entropy Loss")
     parser.add_argument("--model-arch", type=str, default="deeplabv3plus", choices=["deeplabv3plus", "unet"], help="Model architecture to use")
     parser.add_argument("--continue-from", type=str, default=None, help="Path to a checkpoint to continue training from")
+    parser.add_argument("--resnet-size", type=int, default=101, choices=[50, 101], help="Size of ResNet backbone for DeepLabV3+ (50 or 101)")
+    parser.add_argument("--freeze-backbone", action="store_true", help="Whether to freeze the backbone of DeepLabV3+ during training")
 
     return parser
 
@@ -176,29 +243,51 @@ def main(args):
 
 
     # Load the dataset and make a split for training and validation
-    train_dataset = Cityscapes(
-        args.data_dir,
-        split="train",
-        mode="fine",
-        target_type="semantic",
-        # Use the plural 'transforms' argument!
-        transforms=JointTransform(crop_size=513, is_train=True),
-    )
+    if args.model_arch == "unet":
+        train_dataset = Cityscapes(
+            args.data_dir,
+            split="train",
+            mode="fine",
+            target_type="semantic",
+            # Use the plural 'transforms' argument!
+            transforms=JointTransform(crop_size=512, is_train=True),
+        )
 
-    valid_dataset = Cityscapes(
-        args.data_dir,
-        split="val",
-        mode="fine",
-        target_type="semantic",
-        # Use center crop for validation
-        transforms=JointTransform(crop_size=513, is_train=False),
-    )
+        valid_dataset = Cityscapes(
+            args.data_dir,
+            split="val",
+            mode="fine",
+            target_type="semantic",
+            # Use center crop for validation
+            transforms=JointTransform(crop_size=512, is_train=False),
+        )
+    elif args.model_arch == "deeplabv3plus":
+        train_dataset = Cityscapes(
+            args.data_dir,
+            split="train",
+            mode="fine",
+            target_type="semantic",
+            # Use the plural 'transforms' argument!
+            transforms=JointTransform(crop_size=513, is_train=True),
+        )
+
+        valid_dataset = Cityscapes(
+            args.data_dir,
+            split="val",
+            mode="fine",
+            target_type="semantic",
+            # Use center crop for validation
+            transforms=JointTransform(crop_size=513, is_train=False),
+        )
 
     train_dataloader = DataLoader(
         train_dataset, 
         batch_size=args.batch_size, 
         shuffle=True,
-        num_workers=args.num_workers
+        num_workers=args.num_workers,
+        pin_memory=True,           # Transfers data to GPU faster
+        persistent_workers=True,    # Keeps workers "warm" between epochs
+        prefetch_factor=2          # Workers will prepare 2 batches in advance
     )
     valid_dataloader = DataLoader(
         valid_dataset, 
@@ -216,12 +305,14 @@ def main(args):
                 in_channels=3,  # RGB images
                 n_classes=19,  # 19 classes in the Cityscapes dataset
                 Resnet_weights=True,  # Use pretrained weights for the backbone
+                Resnet_size=args.resnet_size,  # Use the specified ResNet size
             )
         else:
             model = DeepLabV3Plus(
                 in_channels=3,  # RGB images
                 n_classes=19,
                 Resnet_weights=False,  # Don't load pretrained weights for the backbone
+                Resnet_size=args.resnet_size,  # Use the specified ResNet size
             )
             state_dict = torch.load(
                 args.continue_from, 
@@ -252,15 +343,17 @@ def main(args):
         criterion = FocalLoss(ignore_index=255, gamma=2.0)  # Ignore the void class
     elif args.loss_function == "cross_entropy":
         criterion = nn.CrossEntropyLoss(ignore_index=255)  # Ignore the void class
+    elif args.loss_function == "ce_dice":
+        criterion = CEDiceLoss(ignore_index=255, ce_weight=1.0, dice_weight=1.0)  # Equal weighting for CE and Dice
     
     max_iters = len(train_dataloader) * args.epochs
 
     def backbone_lambda(current_iter):
-        #current_epoch = current_iter // len(train_dataloader)
-        #if current_epoch < 5:
-        #    return 0.0  # Keep frozen for first 5 epochs
-        #else:
-        return (1 - current_iter / max_iters) ** 0.9  # Poly decay after epoch 5
+        current_epoch = current_iter // len(train_dataloader)
+        if args.model_arch == "deeplabv3plus" and args.freeze_backbone:
+            if current_epoch < 10:
+                return 0.0  # Keep frozen for first 10 epochs
+        return (1 - current_iter / max_iters) ** 0.9  # Poly decay after epoch 10
 
     def head_lambda(current_iter):
             return (1 - current_iter / max_iters) ** 0.9 # Poly decay from day 1
@@ -271,10 +364,13 @@ def main(args):
         # Separate backbone and head parameters
         backbone_params = list(model.low_level_features.parameters()) + list(model.high_level_features.parameters())
         head_params = list(model.aspp.parameters()) + list(model.decoder.parameters())
-        optimizer=SGD([
-            {'params': backbone_params, 'lr': args.lr * 0.1}, # 10x smaller for the backbone
-            {'params': head_params, 'lr': args.lr}            # Normal rate for the heads
+        backbone_lr = args.lr * 0.5 if args.freeze_backbone else args.lr * 0.1
+        
+        optimizer = SGD([
+            {'params': backbone_params, 'lr': backbone_lr}, 
+            {'params': head_params, 'lr': args.lr}          
         ], momentum=0.9, weight_decay=1e-4)
+        
         scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer, 
             lr_lambda=[backbone_lambda, head_lambda]
@@ -289,6 +385,23 @@ def main(args):
     current_best_model_path = None
     for epoch in range(args.epochs):
         print(f"Epoch {epoch+1:04}/{args.epochs:04}")
+        
+        # --- THE FREEZE/UNFREEZE LOGIC ---
+        if args.model_arch == "deeplabv3plus" and args.freeze_backbone:
+            if epoch < 10:
+                # Freeze backbone
+                for param in model.module.low_level_features.parameters() if hasattr(model, 'module') else model.low_level_features.parameters():
+                    param.requires_grad = False
+                for param in model.module.high_level_features.parameters() if hasattr(model, 'module') else model.high_level_features.parameters():
+                    param.requires_grad = False
+            elif epoch == 10:
+                # Unfreeze backbone and update optimizer learning rate
+                print("Unfreezing backbone!")
+                for param in model.module.low_level_features.parameters() if hasattr(model, 'module') else model.low_level_features.parameters():
+                    param.requires_grad = True
+                for param in model.module.high_level_features.parameters() if hasattr(model, 'module') else model.high_level_features.parameters():
+                    param.requires_grad = True
+                    
         # Training
         model.train()
         for i, (images, labels) in enumerate(train_dataloader):
