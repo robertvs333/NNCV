@@ -13,65 +13,57 @@ from torchvision.transforms.v2 import (
     InterpolationMode,
 )
 
-from model import DeepLabV3Plus # Ensure this matches your local file
+from model import DeepLabV3Plus, Model # Ensure this matches your local file
 
 IMAGE_DIR = "/data"
 OUTPUT_DIR = "/output"
 MODEL_PATH = "/app/model.pt"
 
-def preprocess(img: Image.Image) -> torch.Tensor:
-    # 1. Resize to the target wide canvas
-    img_resized = F.resize(img, size=(769, 1538), interpolation=InterpolationMode.BILINEAR)
+def preprocess(img: Image.Image, architecture="deeplabv3plus") -> torch.Tensor:
+    # Set size based on architecture: 513 for DeepLab, 512 for U-Net
+    target_size = 513 if architecture == "deeplabv3plus" else 512
     
-    # 2. Extract Left and Right halves
-    # crop(img, top, left, height, width)
-    left_half = F.crop(img_resized, 0, 0, 769, 769)
-    right_half = F.crop(img_resized, 0, 769, 769, 769)
-    
-    # 3. Combine into a batch [2, 3, 769, 769]
-    batch = torch.stack([ToImage()(left_half), ToImage()(right_half)])
-    
-    # 4. Final normalization and dtype conversion
     transform = Compose([
+        ToImage(),
+        # Passing a single int resizes the SHORTER edge and maintains aspect ratio
+        Resize(size=target_size, interpolation=InterpolationMode.BILINEAR),
         ToDtype(dtype=torch.float32, scale=True),
         Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
-    
-    return transform(batch)
+    # Returns [1, 3, H, W]
+    return transform(img).unsqueeze(0)
 
 
-def postprocess(pred: torch.Tensor, original_shape: tuple) -> np.ndarray:
+def postprocess(logits: torch.Tensor, original_shape: tuple) -> np.ndarray:
     """
-    pred: Tensor of shape [2, C, 769, 769] (Batch of 2: Left and Right)
-    original_shape: (Height, Width)
+    logits: Tensor of shape [1, 19, H, W]
+    original_shape: (height, width) e.g., (1024, 2048)
     """
-    # 1. Get class predictions for both halves
-    pred_soft = nn.Softmax(dim=1)(pred)
-    pred_max = torch.argmax(pred_soft, dim=1)  # Shape: [2, 769, 769]
+    # 1. Get class indices: [1, 19, H, W] -> [1, 1, H, W]
+    pred_max = torch.argmax(logits, dim=1, keepdim=True)
 
-    # 2. Stitch the two 769x769 halves horizontally back to 1538x769
-    # Dim 1 is width here because batch dim was removed by argmax
-    stitched_mask = torch.cat([pred_max[0], pred_max[1]], dim=1) 
-    
-    # 3. Add batch and channel dims for Resize: [1, 1, 769, 1538]
-    stitched_mask = stitched_mask.unsqueeze(0).unsqueeze(0)
-
-    # 4. Resize back to original image dimensions
-    prediction = F.resize(
-        stitched_mask, 
+    # 2. Resize back to original image dimensions (1024x2048)
+    # We use nearest neighbor to ensure we don't create "fake" class IDs
+    pred_resized = F.interpolate(
+        pred_max.float(), 
         size=original_shape, 
-        interpolation=InterpolationMode.NEAREST
+        mode='nearest'
     )
-
-    prediction_numpy = prediction.cpu().detach().numpy()
+    
+    prediction_numpy = pred_resized.cpu().detach().numpy()
     return prediction_numpy.squeeze().astype(np.uint8)
 
 
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-
+    # ADJUST THESE based on your experiment
+    ARCH = "deeplabv3plus" 
+    RESNET_SIZE = 101
     # Load model
-    model = DeepLabV3Plus(Resnet_weights=False)
+    if ARCH == "deeplabv3plus":
+        model = DeepLabV3Plus(Resnet_weights=False, Resnet_size=RESNET_SIZE)
+    else:
+        model = Model()
     state_dict = torch.load(
         MODEL_PATH, 
         map_location=device,
@@ -89,7 +81,7 @@ def main():
             original_shape = (img.height, img.width)
 
             # Preprocess returns a batch of 2 (Left/Right)
-            img_batch = preprocess(img).to(device)
+            img_batch = preprocess(img, architecture=ARCH).to(device)
             
             # Model processes both halves in one forward pass
             pred = model(img_batch) # Output: [2, C, 769, 769]
