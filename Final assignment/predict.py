@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from PIL import Image
-import torchvision.transforms.v2.functional as F
+import torch.nn.functional as F
 from torchvision.transforms.v2 import (
     Compose, 
     ToImage, 
