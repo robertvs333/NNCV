@@ -344,7 +344,7 @@ def main(args):
     elif args.loss_function == "cross_entropy":
         criterion = nn.CrossEntropyLoss(ignore_index=255)  # Ignore the void class
     elif args.loss_function == "ce_dice":
-        criterion = CEDiceLoss(ignore_index=255, ce_weight=1.0, dice_weight=1.0)  # Equal weighting for CE and Dice
+        criterion = CEDiceLoss(ignore_index=255, ce_weight=1.0, dice_weight=1.0, class_weights=cityscapes_weights)  # Equal weighting for CE and Dice
     
     max_iters = len(train_dataloader) * args.epochs
 

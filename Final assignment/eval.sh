@@ -1,4 +1,4 @@
 python3 eval_local.py \
     --model_arch "deeplabv3plus" \
-    --model_path "./checkpoints/DeepLab_CrossEntropy_lr/best_model-epoch=0097-val_loss=0.21301333792507648.pt" \
+    --model_path "./checkpoints/DeepLab_Focal_test_run/best_model-epoch=0193-val_loss=0.08688327763229609.pt" \
     --Resnet_size 101 \
