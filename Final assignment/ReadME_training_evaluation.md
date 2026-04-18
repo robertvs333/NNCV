@@ -75,9 +75,11 @@ python Evaluation_scripts/eval_local.py \
 ```
 
 Remember to adjust `--model_path`, `--model_arch`, and `--Resnet_size` to match your trained model.
-```
 
+```
+```
 ## Submission 
 The details for submission are the same as in the other Readme's however in predict.py you need to make sure that you adjust ARCH to the correct architecture. The correct names are: "unet" or "deeplabv3plus".
+```
 
 
