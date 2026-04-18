@@ -1,0 +1,5 @@
+Model,Loss,Flat,Const.,Obj.,Nat.,Sky,Hum.,Veh.,mIoU
+unet,CrossEntropy,0.83,0.57,0.57,0.75,0.93,0.53,0.4,0.58
+unet,CrossEntropy,90.47,82.37,55.09,88.51,92.79,63.42,77.98,57.68
+unet,CrossEntropy,97.77,88.27,57.98,91.16,92.79,71.32,86.23,57.68
+unet,CrossEntropy,97.77,88.27,57.98,91.16,92.79,71.32,86.23,57.68
