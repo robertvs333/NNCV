@@ -1,5 +1,5 @@
 wandb login
-
+cd .. 
 python3 train.py \
     --data-dir ./data/cityscapes \
     --batch-size 64 \

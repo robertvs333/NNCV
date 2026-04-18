@@ -1,3 +1,24 @@
+"""
+This script is designed to perform inference using a trained model within a Docker container
+for the Cityscapes Challenge submission. It expects specific input and output directory
+structures and a model weight file at a predefined path.
+
+### How to use this script (within Docker):
+This script is the entrypoint for the Docker container. It will be executed automatically
+when the Docker container is run.
+
+- **Input:** It reads `.png` images from the `IMAGE_DIR` ("/data").
+- **Model:** It loads the model weights from `MODEL_PATH` ("/app/model.pt").
+- **Output:** It saves the predicted segmentation masks as `.png` files to the `OUTPUT_DIR` ("/output").
+
+### Configuration:
+- `ARCH`: Set this to "unet" or "deeplabv3plus" based on your trained model.
+- `RESNET_SIZE`: If using "deeplabv3plus", set the ResNet backbone size (50 or 101).
+
+Before building the Docker image, ensure your best trained model checkpoint is copied to
+`Final assignment/model.pt` in your repository root.
+"""
+
 from pathlib import Path
 import torch
 import torch.nn as nn
@@ -57,7 +78,7 @@ def postprocess(logits: torch.Tensor, original_shape: tuple) -> np.ndarray:
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # ADJUST THESE based on your experiment
-    ARCH = "deeplabv3plus" 
+    ARCH = "unet" 
     RESNET_SIZE = 101
     # Load model
     if ARCH == "deeplabv3plus":

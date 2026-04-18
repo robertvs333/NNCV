@@ -1,3 +1,18 @@
+"""
+This script provides a local evaluation utility for your trained segmentation models
+on the Cityscapes validation set. It calculates the Mean Intersection over Union (mIoU)
+and per-class IoU scores.
+
+
+### Arguments:
+- `--data_dir`: Path to the Cityscapes dataset.
+- `--model_path`: Path to your trained model's `.pt` checkpoint file.
+- `--model_arch`: The architecture of your model ("deeplabv3plus" or "unet").
+- `--Resnet_size`: (Optional, for DeepLabV3+ only) The size of the ResNet backbone (50 or 101).
+
+Ensure that the `model.py` file is accessible from this script's location.
+"""
+
 import torch
 import numpy as np
 import argparse # Added missing import
@@ -7,10 +22,9 @@ from torchvision.datasets import Cityscapes
 from torchvision.transforms.v2 import (
     Compose, ToImage, Resize, ToDtype, Normalize, InterpolationMode
 )
-import torchvision.transforms.v2.functional as TF
 
 # Import your model
-from model import DeepLabV3Plus, Model
+from ..model import DeepLabV3Plus, Model
 
 # 1. Configuration
 DATA_DIR = "./data/cityscapes" 

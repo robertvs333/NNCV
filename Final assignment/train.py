@@ -39,8 +39,6 @@ import torch.nn.functional as F
 
 from model import Model, DeepLabV3Plus
 
-import torch.nn.functional as F
-
 class CEDiceLoss(nn.Module):
     def __init__(self, ignore_index=255, ce_weight=1.0, dice_weight=1.0, class_weights=None):
         """
@@ -171,7 +169,7 @@ def get_args_parser():
     parser.add_argument("--num-workers", type=int, default=10, help="Number of workers for data loaders")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--experiment-id", type=str, default="unet-training", help="Experiment ID for Weights & Biases")
-    parser.add_argument("--loss-function", type=str, default="focal", choices=["focal", "cross_entropy", "cross_entropy_weighted", "ce_dice"], help="Select Focal Loss or Cross Entropy Loss")
+    parser.add_argument("--loss-function", type=str, default="focal", choices=["focal", "cross_entropy", "cross_entropy_weighted", "ce_dice"], help="Select the loss function to use from the available choices")
     parser.add_argument("--model-arch", type=str, default="deeplabv3plus", choices=["deeplabv3plus", "unet"], help="Model architecture to use")
     parser.add_argument("--continue-from", type=str, default=None, help="Path to a checkpoint to continue training from")
     parser.add_argument("--resnet-size", type=int, default=101, choices=[50, 101], help="Size of ResNet backbone for DeepLabV3+ (50 or 101)")
@@ -232,7 +230,7 @@ def main(args):
     output_dir = os.path.join("checkpoints", args.experiment_id)
     os.makedirs(output_dir, exist_ok=True)
 
-    # Set seed for reproducability
+    # Set seed for reproducibility
     # If you add other sources of randomness (NumPy, Random), 
     # make sure to set their seeds as well
     torch.manual_seed(args.seed)
@@ -329,7 +327,7 @@ def main(args):
     # Define the loss function
     # 1. Define the smoothed heuristic weights for Cityscapes
     cityscapes_weights = torch.tensor([
-        0.05, 0.05, 0.05, # 0, 1, 2: Road, Sidewalk, Building (Massive classes)
+        0.05, 0.05, 0.05, # 0, 1, 2: Road, Sidewalk, Building (Relatively massive classes)
         0.20, 0.20, 0.20, # 3, 4, 5: Wall, Fence, Pole (Thin/Medium classes)
         0.80, 0.80,       # 6, 7: Traffic Light, Traffic Sign (Tiny classes)
         0.05, 0.10,       # 8, 9: Vegetation, Terrain
@@ -357,6 +355,7 @@ def main(args):
 
     def head_lambda(current_iter):
             return (1 - current_iter / max_iters) ** 0.9 # Poly decay from day 1
+            
     scheduler = None
     if args.model_arch == "unet":
         optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -371,15 +370,16 @@ def main(args):
             {'params': head_params, 'lr': args.lr}          
         ], momentum=0.9, weight_decay=1e-4)
         
+        # Initialize the learning rate scheduler
         scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer, 
             lr_lambda=[backbone_lambda, head_lambda]
         )
-   #scheduler 
     
     if torch.cuda.device_count() > 1:
         print(f"Using {torch.cuda.device_count()} GPUs for training!")
         model = nn.DataParallel(model)
+        
     # Training loop
     best_valid_loss = float('inf')
     current_best_model_path = None
@@ -395,7 +395,7 @@ def main(args):
                 for param in model.module.high_level_features.parameters() if hasattr(model, 'module') else model.high_level_features.parameters():
                     param.requires_grad = False
             elif epoch == 10:
-                # Unfreeze backbone and update optimizer learning rate
+                # Unfreeze backbone (optimizer learning rate is updated dynamically by the scheduler)
                 print("Unfreezing backbone!")
                 for param in model.module.low_level_features.parameters() if hasattr(model, 'module') else model.low_level_features.parameters():
                     param.requires_grad = True
@@ -484,7 +484,7 @@ def main(args):
         model_to_save.state_dict(),
         os.path.join(
             output_dir,
-            f"final_model-epoch={epoch:04}-val_loss={valid_loss:.4}.pt" # Fixed string format!
+            f"final_model-epoch={epoch:04}-val_loss={valid_loss:.4}.pt" # Use .4 to format the validation loss to 4 significant digits
         )
     )
     wandb.finish()
